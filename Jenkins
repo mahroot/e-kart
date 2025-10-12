@@ -1,0 +1,80 @@
+pipeline {
+    agent any
+    
+    tools {
+        jdk 'jdk11'
+        maven 'maven3'
+    }
+    
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+
+    stages {
+
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/jaiswaladi246/Ekart.git'
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                sh '''
+                $SCANNER_HOME/bin/sonar-scanner \
+                -Dsonar.projectKey=myproject \
+                -Dsonar.projectName=myproject \
+                -Dsonar.sources=. \
+                -Dsonar.java.binaries=. \
+                -Dsonar.host.url=http://localhost:9000 \
+                -Dsonar.login=squ_4a45984b87381c6036235379842fbe66ac9d0706
+                '''
+            }
+        }
+
+        stage('OWASP Dependency-Check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan . --format XML --out dependency-check-report', odcInstallation: 'DP'
+                dependencyCheckPublisher pattern: '**/dependency-check-report/dependency-check-report.xml'
+            }
+        }
+
+        stage('Build Application') {
+            steps {
+                sh 'mvn clean install -DskipTests=true'
+            }
+        }
+
+        stage('Docker Build and Push') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-hub', toolName: 'docker') {
+                        sh 'docker build -t shopping:latest -f docker/Dockerfile .'
+                        sh 'docker tag shopping:latest omrajput/shopping:latest'
+                        
+                        retry(3) {
+                            sh 'docker push omrajput/shopping:latest'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                script {
+                    sh '''
+                    docker rm -f shopping || true
+                    docker run -d --name shopping -p 8070:8070 omrajput/shopping:latest
+                    '''
+                }
+            }
+        }
+    }
+}
